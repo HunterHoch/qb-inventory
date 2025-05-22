@@ -40,4 +40,6 @@ Config = {
         { name = 'kurkakola',    price = 4, amount = 50 },
         { name = 'water_bottle', price = 4, amount = 50 },
     },
+
+    EnableSnowballs = false,
 }
