@@ -501,7 +501,9 @@ function OpenInventoryById(source, targetId)
     local QBPlayer = QBCore.Functions.GetPlayer(source)
     local TargetPlayer = QBCore.Functions.GetPlayer(tonumber(targetId))
     if not QBPlayer or not TargetPlayer then return end
-    if Player(targetId).state.inv_busy then CloseInventory(targetId) end
+    if Player(targetId).state.inv_busy then return end
+    Player(targetId).state.inv_busy = true
+    OpenOtherInventories[source] = targetId
     local playerItems = QBPlayer.PlayerData.items
     local targetItems = TargetPlayer.PlayerData.items
     local formattedInventory = {
@@ -512,7 +514,6 @@ function OpenInventoryById(source, targetId)
         inventory = targetItems
     }
     Wait(1500)
-    Player(targetId).state.inv_busy = true
     TriggerClientEvent('qb-inventory:client:openInventory', source, playerItems, formattedInventory)
 end
 
@@ -678,6 +679,8 @@ function AddItem(identifier, item, amount, slot, info, reason)
         print('AddItem: Invalid item')
         return false
     end
+    amount = tonumber(amount) or 1
+    if amount <= 0 then return false end
     local inventory, inventoryWeight, inventorySlots
     local player = QBCore.Functions.GetPlayer(identifier)
 
@@ -699,14 +702,12 @@ function AddItem(identifier, item, amount, slot, info, reason)
         print('AddItem: Inventory not found')
         return false
     end
-
     local totalWeight = GetTotalWeight(inventory)
     if totalWeight + (itemInfo.weight * amount) > inventoryWeight then
         print('AddItem: Not enough weight available')
         return false
     end
 
-    amount = tonumber(amount) or 1
     local updated = false
 
     if not itemInfo.unique then
@@ -828,6 +829,7 @@ function RemoveItem(identifier, item, amount, slot, reason)
     end
 
     amount = tonumber(amount)
+    if not amount or amount <= 0 then return false end
     if inventoryItem.amount < amount then
         print('RemoveItem: Not enough items in slot')
         return false

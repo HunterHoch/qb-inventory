@@ -2,6 +2,7 @@ QBCore = exports['qb-core']:GetCoreObject()
 Inventories = {}
 Drops = {}
 RegisteredShops = {}
+OpenOtherInventories = {}
 
 CreateThread(function()
     MySQL.query('SELECT * FROM inventories', {}, function(result)
@@ -40,6 +41,7 @@ AddEventHandler('playerDropped', function()
             inv.isOpen = false
         end
     end
+    OpenOtherInventories[source] = nil
 end)
 
 AddEventHandler('txAdmin:events:serverShuttingDown', function()
@@ -140,10 +142,23 @@ RegisterNetEvent('qb-inventory:server:openVending', function(data)
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
+    local ped = GetPlayerPed(src)
+    local pCoords = GetEntityCoords(ped)
+    local found = false
+    local objCoords
+    for _, model in pairs(Config.VendingObjects) do
+        local obj = GetClosestObjectOfType(pCoords.x, pCoords.y, pCoords.z, 1.5, GetHashKey(model), false, false, false)
+        if obj ~= 0 then
+            found = true
+            objCoords = GetEntityCoords(obj)
+            break
+        end
+    end
+    if not found then return end
     CreateShop({
         name = 'vending',
         label = 'Vending Machine',
-        coords = data.coords,
+        coords = objCoords,
         slots = #Config.VendingItems,
         items = Config.VendingItems
     })
@@ -154,16 +169,17 @@ RegisterNetEvent('qb-inventory:server:closeInventory', function(inventory)
     local src = source
     local QBPlayer = QBCore.Functions.GetPlayer(src)
     if not QBPlayer then return end
-    Player(source).state.inv_busy = false
+    Player(src).state.inv_busy = false
     if inventory:find('shop%-') then return end
     if inventory:find('otherplayer%-') then
         local targetId = tonumber(inventory:match('otherplayer%-(.+)'))
         Player(targetId).state.inv_busy = false
+        OpenOtherInventories[src] = nil
         return
     end
-    if Drops[inventory] then
+    if Drops[inventory] and Drops[inventory].isOpen == src then
         Drops[inventory].isOpen = false
-        if #Drops[inventory].items == 0 and not Drops[inventory].isOpen then -- if no listeed items in the drop on close
+        if #Drops[inventory].items == 0 then
             TriggerClientEvent('qb-inventory:client:removeDropTarget', -1, Drops[inventory].entityId)
             Wait(500)
             local entity = NetworkGetEntityFromNetworkId(Drops[inventory].entityId)
@@ -174,7 +190,11 @@ RegisterNetEvent('qb-inventory:server:closeInventory', function(inventory)
     end
     if not Inventories[inventory] then return end
     Inventories[inventory].isOpen = false
-    MySQL.prepare('INSERT INTO inventories (identifier, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = ?', { inventory, json.encode(Inventories[inventory].items), json.encode(Inventories[inventory].items) })
+    MySQL.prepare('INSERT INTO inventories (identifier, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = ?', {
+        inventory,
+        json.encode(Inventories[inventory].items),
+        json.encode(Inventories[inventory].items)
+    })
 end)
 
 RegisterNetEvent('qb-inventory:server:useItem', function(item)
@@ -257,7 +277,7 @@ RegisterNetEvent('qb-inventory:server:openDrop', function(dropId)
         slots = drop.slots,
         inventory = drop.items
     }
-    drop.isOpen = true
+    drop.isOpen = src
     TriggerClientEvent('qb-inventory:client:openInventory', source, Player.PlayerData.items, formattedInventory)
 end)
 
@@ -266,6 +286,7 @@ RegisterNetEvent('qb-inventory:server:updateDrop', function(dropId, coords)
 end)
 
 RegisterNetEvent('qb-inventory:server:snowball', function(action)
+    if not Config.EnableSnowballs then return end
     if action == 'add' then
         AddItem(source, 'weapon_snowball', 1, false, false, 'qb-inventory:server:snowball')
     elseif action == 'remove' then
@@ -311,7 +332,7 @@ QBCore.Functions.CreateCallback('qb-inventory:server:createDrop', function(sourc
                 coords = playerCoords,
                 maxweight = Config.DropSize.maxweight,
                 slots = Config.DropSize.slots,
-                isOpen = true
+                isOpen = false
             }
             TriggerClientEvent('qb-inventory:client:setupDropTarget', -1, dropId)
         else
@@ -325,7 +346,11 @@ end)
 
 QBCore.Functions.CreateCallback('qb-inventory:server:attemptPurchase', function(source, cb, data)
     local itemInfo = data.item
-    local amount = data.amount
+    local amount = tonumber(data.amount)
+    if not amount or amount <= 0 then
+        cb(false)
+        return
+    end
     local shop = string.gsub(data.shop, 'shop%-', '')
     local Player = QBCore.Functions.GetPlayer(source)
 
@@ -497,6 +522,22 @@ RegisterNetEvent('qb-inventory:server:SetInventoryData', function(fromInventory,
     if not Player then return end
 
     fromSlot, toSlot, fromAmount, toAmount = tonumber(fromSlot), tonumber(toSlot), tonumber(fromAmount), tonumber(toAmount)
+    if not fromSlot or not toSlot or not fromAmount or not toAmount then return end
+    if fromAmount <= 0 or toAmount <= 0 then return end
+
+    local function hasAccess(inv)
+        if inv == 'player' then return true end
+        if inv:find('otherplayer%-') then
+            local target = tonumber(inv:match('otherplayer%-(.+)'))
+            return OpenOtherInventories[src] == target
+        elseif Drops[inv] then
+            return Drops[inv].isOpen == src
+        elseif Inventories[inv] then
+            return Inventories[inv].isOpen == src
+        end
+        return false
+    end
+    if not hasAccess(fromInventory) or not hasAccess(toInventory) then return end
 
     local fromItem = getItem(fromInventory, src, fromSlot)
     local toItem = getItem(toInventory, src, toSlot)
